@@ -1,5 +1,4 @@
-﻿
-/*
+﻿/*
  * MIT License
  * Copyright(c) 2018 - Zhang Yuexin
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -21,20 +20,20 @@
 
 using System;
 using System.Threading.Tasks;
-using System.Devices.Gpio;
-using System.Devices.Spi;
 using System.Threading;
 using System.Text;
 using System.Collections.Generic;
+using System.Device.Gpio;
+using System.Device.Gpio.Drivers;
+using System.Device.Spi;
+using System.Device.Spi.Drivers;
 
 namespace NRF24L01Plus
-{ 
+{
     public class NRF24L01 : IDisposable
     {
         private SpiDevice sensor;
-        private GpioPin ce;
-        private GpioPin irq;
-        private RaspberryPiDriver driver;
+        private RaspberryPi3Driver driver;
         private GpioController gpio;
         private bool isPlusModel;
 
@@ -45,6 +44,7 @@ namespace NRF24L01Plus
         private byte packetSize;
 
         #region Address and Command
+
         private const byte FEATURE = 0x1D;
         private const byte EN_AA = 0x01;
         private const byte EN_RXADDR = 0x02;
@@ -87,7 +87,7 @@ namespace NRF24L01Plus
         private const byte FLUSH_RX = 0xE2;
         private const byte REUSE_TX_PL = 0xE3;
         private const byte NOP = 0xFF;
-        
+
         private const byte EN_ACK_PAY = 1;
         private const byte EN_DPL = 2;
         private const byte DPL_P5 = 5;
@@ -109,10 +109,18 @@ namespace NRF24L01Plus
         private const int RX_P_NO = 1;
         private const int TX_FULL = 0;
 
-        private readonly List<byte> pipes = new List<byte> { RX_ADDR_P0,
-            RX_ADDR_P1, RX_ADDR_P2, RX_ADDR_P3, RX_ADDR_P4, RX_ADDR_P5 };
-        private readonly List<byte> pipeEnabledFlag = new List<byte> { ERX_P0,
-            ERX_P1, ERX_P2, ERX_P3, ERX_P4, ERX_P5 };
+        private readonly List<byte> pipes = new List<byte>
+        {
+            RX_ADDR_P0,
+            RX_ADDR_P1, RX_ADDR_P2, RX_ADDR_P3, RX_ADDR_P4, RX_ADDR_P5
+        };
+
+        private readonly List<byte> pipeEnabledFlag = new List<byte>
+        {
+            ERX_P0,
+            ERX_P1, ERX_P2, ERX_P3, ERX_P4, ERX_P5
+        };
+
         #endregion
 
         public WhatHappened WhatHappened
@@ -120,7 +128,7 @@ namespace NRF24L01Plus
             get
             {
                 var status = ReadRegister(STATUS);
-                
+
                 return new WhatHappened
                 {
                     DataTransfered = (status & (1 << TX_DS)) != 0,
@@ -132,12 +140,12 @@ namespace NRF24L01Plus
 
         private void ClearTransmitEventRegisters()
         {
-            WriteRegister(STATUS, (byte)((1 << TX_DS) | (1 << MAX_RT)));
+            WriteRegister(STATUS, (byte) ((1 << TX_DS) | (1 << MAX_RT)));
         }
 
         private void ClearDataReceivedRegister()
         {
-            WriteRegister(STATUS, (byte)(1 << RX_DR));
+            WriteRegister(STATUS, (byte) (1 << RX_DR));
         }
 
         /// <summary>
@@ -159,30 +167,37 @@ namespace NRF24L01Plus
         /// <summary>
         /// Initialize
         /// </summary>
-        public void Initialize()
+        public void Initialize(int busId = 0)
         {
-            var settings = new SpiConnectionSettings(0, (uint)CS);
-            settings.ClockFrequency = 8000000U; 
+            var settings = new SpiConnectionSettings(busId, CS);
+            settings.ClockFrequency = 8000000;
             settings.DataBitLength = 8;
             settings.Mode = SpiMode.Mode0;
 
             sensor = new UnixSpiDevice(settings);
-            driver = new RaspberryPiDriver();
-            gpio = new GpioController(driver);
-            
-            ce = gpio.OpenPin(CE, PinMode.Output);
-            ce.Write(PinValue.High);
-            irq = gpio.OpenPin(IRQ, PinMode.Input);
-            irq.ValueChanged += Irq_ValueChanged;
+            driver = new RaspberryPi3Driver();
+            gpio = new GpioController(PinNumberingScheme.Logical, driver);
+
+            gpio.OpenPin(CE, PinMode.Output);
+            gpio.Write(CE, PinValue.High);
+            gpio.OpenPin(IRQ, PinMode.Input);
+            gpio.RegisterCallbackForPinValueChangedEvent(IRQ, PinEventTypes.Falling, Irq_ValueChangedDown);
+
+            gpio.Write(CE, PinValue.Low);
+            // reflect RX_DR interrupt, TX_DS interrupt not reflected, power up, receive mode
+            WriteRegister(R_REGISTER, 0b_0011_1011);
+            gpio.Write(CE, PinValue.High);
 
             Thread.Sleep(20);
             SetRxPayloadSize(packetSize);
 
-            SetChannel(0x76);
+            SetChannel(25);
             if (SetDataRate(DataRate.DR250Kbps))
+            {
                 isPlusModel = true;
+            }
 
-            SetCRCLength(CRCLength.CRC16);
+            SetCRCLength(CRCLength.CRC8);
             SetPALevel(PALevel.PA_MAX);
             EnableAckPayload();
             SetRetryPolicy(3, 15);
@@ -196,12 +211,12 @@ namespace NRF24L01Plus
 
         public void FlushTX()
         {
-            sensor.Write(new byte[] { FLUSH_TX });
+            sensor.Write(new byte[] {FLUSH_TX});
         }
 
         public void FlushRX()
         {
-            sensor.Write(new byte[] { FLUSH_RX });
+            sensor.Write(new byte[] {FLUSH_RX});
         }
 
         public string GetDetailsString()
@@ -213,8 +228,8 @@ namespace NRF24L01Plus
             details.Append($" TX_DS={((status & (1 << TX_DS)) != 0 ? 1 : 0):X2}");
             details.Append($" MAX_RT={((status & (1 << MAX_RT)) != 0 ? 1 : 0):X2}");
             details.Append($" RX_P_NO={((status >> RX_P_NO) & 7):X2}");
-            details.AppendLine($" TX_FULL={((status & (1 << TX_FULL)) != 0 ? 1 : 0):X2}"); 
-            
+            details.AppendLine($" TX_FULL={((status & (1 << TX_FULL)) != 0 ? 1 : 0):X2}");
+
             details.AppendLine(GetSettingString(" RX_ADDR_P0-1", RX_ADDR_P0, 5, 2));
             details.AppendLine(GetSettingString(" RX_ADDR_P2-5", RX_ADDR_P2, 1, 4));
             details.AppendLine(GetSettingString(" TX_ADDR", TX_ADDR, 5, 1));
@@ -244,12 +259,13 @@ namespace NRF24L01Plus
 
             for (byte i = 0; i < registerCount; i++)
             {
-                var value = ReadRegister((byte)(register + i), valueLength);
+                var value = ReadRegister((byte) (register + i), valueLength);
                 result.Append("0x");
-                for(int j = valueLength - 1; j >= 0; j--)
+                for (int j = valueLength - 1; j >= 0; j--)
                     result.Append(value[j].ToString("X2"));
                 result.Append(" ");
             }
+
             return result.ToString();
         }
 
@@ -257,16 +273,16 @@ namespace NRF24L01Plus
         {
             byte[] response = new byte[length + 1];
             byte[] request = new byte[length + 1];
-            request[0] = (byte)(R_REGISTER + register);
+            request[0] = (byte) (R_REGISTER + register);
             for (int i = 1; i < request.Length; i++)
                 request[i] = NOP;
 
             sensor.TransferFullDuplex(request, response);
 
             var result = new byte[length];
-            for(int i = 0; i< length; i++)
+            for (int i = 0; i < length; i++)
                 result[i] = response[i + 1];
-            
+
             return result;
         }
 
@@ -277,22 +293,23 @@ namespace NRF24L01Plus
 
         internal void WriteRegister(byte register, byte value)
         {
-            WriteRegister(register, new byte[] { value });
+            WriteRegister(register, new byte[] {value});
         }
 
         internal void WriteRegister(byte register, byte[] value)
         {
             byte[] buffer = new byte[value.Length + 1];
-            buffer[0] = (byte)(W_REGISTER + register);
+            buffer[0] = (byte) (W_REGISTER + register);
             for (int i = 0; i < value.Length; i++)
                 buffer[i + 1] = value[i];
+
             sensor.Write(buffer);
         }
 
         private byte GetStatus()
         {
             byte[] result = new byte[1];
-            sensor.TransferFullDuplex(new byte[] { NOP }, result);
+            sensor.TransferFullDuplex(new byte[] {NOP}, result);
             return result[0];
         }
 
@@ -308,7 +325,11 @@ namespace NRF24L01Plus
             if (pipeNumber > 0)
             {
                 WriteRegister(pipes[pipeNumber], pipe);
-                WriteRegister(EN_RXADDR, (byte)(ReadRegister(EN_RXADDR) | (1 << pipeEnabledFlag[pipeNumber])));
+                WriteRegister(EN_RXADDR, (byte) (ReadRegister(EN_RXADDR) | (1 << pipeEnabledFlag[pipeNumber])));
+            }
+            else
+            {
+                WriteRegister(RX_ADDR_P0, pipe);
             }
         }
 
@@ -330,7 +351,7 @@ namespace NRF24L01Plus
             WriteRegister(RX_PW_P4, payloadSize);
             WriteRegister(RX_PW_P5, payloadSize);
         }
-        
+
         /// <summary>
         /// Set retry policy
         /// </summary>
@@ -379,9 +400,9 @@ namespace NRF24L01Plus
         public void SetPALevel(PALevel paLevel)
         {
             var setting = ReadRegister(RF_SETUP);
-            setting = (byte)(setting & ~(int)PALevel.PA_MAX);
+            setting = (byte) (setting & ~(int) PALevel.PA_MAX);
 
-            setting |= (byte)paLevel;
+            setting |= (byte) paLevel;
             WriteRegister(RF_SETUP, setting);
         }
 
@@ -391,8 +412,8 @@ namespace NRF24L01Plus
         /// <returns></returns>
         public PALevel GetPALevel()
         {
-            var setting = ReadRegister(RF_SETUP) & (byte)PALevel.PA_MAX;
-            return (PALevel)setting;
+            var setting = ReadRegister(RF_SETUP) & (byte) PALevel.PA_MAX;
+            return (PALevel) setting;
         }
 
         /// <summary>
@@ -401,10 +422,10 @@ namespace NRF24L01Plus
         /// <param name="enabled">Is Enabled</param>
         public void SetAutoAck(bool enabled)
         {
-            byte setting = (byte)(enabled ? 0x3F : 0x00);
+            byte setting = (byte) (enabled ? 0x3F : 0x00);
             WriteRegister(EN_AA, setting);
         }
-        
+
         /// <summary>
         /// Mask data ready event
         /// </summary>
@@ -432,7 +453,7 @@ namespace NRF24L01Plus
                 cfg.Persist(this);
             }
         }
-        
+
         /// <summary>
         /// Mask maximum retries event
         /// </summary>
@@ -446,7 +467,7 @@ namespace NRF24L01Plus
                 cfg.Persist(this);
             }
         }
-        
+
         /// <summary>
         /// Set Power Mode
         /// </summary>
@@ -468,7 +489,7 @@ namespace NRF24L01Plus
         /// </summary>
         public void EnableAckPayload()
         {
-            byte setting = (byte)(ReadRegister(FEATURE) | (1 << EN_ACK_PAY) | (1 << EN_DPL));
+            byte setting = (byte) (ReadRegister(FEATURE) | (1 << EN_ACK_PAY) | (1 << EN_DPL));
 
             WriteRegister(FEATURE, setting);
 
@@ -477,13 +498,13 @@ namespace NRF24L01Plus
             {
                 // Enable them and try again
                 ToggleFeatures();
-                setting = (byte)(ReadRegister(FEATURE) | (1 << EN_ACK_PAY) | (1 << EN_DPL));
+                setting = (byte) (ReadRegister(FEATURE) | (1 << EN_ACK_PAY) | (1 << EN_DPL));
 
                 WriteRegister(FEATURE, setting);
             }
 
             //enable dynamic payloads on pipes 0 and 1
-            setting = (byte)(ReadRegister(DYNPD) | (1 << DPL_P1) | (1 << DPL_P0));
+            setting = (byte) (ReadRegister(DYNPD) | (1 << DPL_P1) | (1 << DPL_P0));
             WriteRegister(DYNPD, setting);
         }
 
@@ -491,7 +512,7 @@ namespace NRF24L01Plus
         private void ToggleFeatures()
         {
             byte activate = 0x50;
-            sensor.Write(new byte[] { activate, 0x73 });
+            sensor.Write(new byte[] {activate, 0x73});
         }
 
         /// <summary>
@@ -517,12 +538,12 @@ namespace NRF24L01Plus
             bool result = false;
 
             byte setting = ReadRegister(RF_SETUP);
-            setting = (byte)(setting & ~((byte)DataRate.DR250Kbps | (byte)DataRate.DR2Mbps));
-            setting |= (byte)rate;
+            setting = (byte) (setting & ~((byte) DataRate.DR250Kbps | (byte) DataRate.DR2Mbps));
+            setting |= (byte) rate;
             WriteRegister(RF_SETUP, setting);
-            
+
             result = ReadRegister(RF_SETUP) == setting;
-                
+
             return result;
         }
 
@@ -531,10 +552,10 @@ namespace NRF24L01Plus
         /// </summary>
         public DataRate GetDataRate()
         {
-            var dataRate = ReadRegister(RF_SETUP) & ((byte)DataRate.DR250Kbps | (byte)DataRate.DR2Mbps);
-            return (DataRate)dataRate;
+            var dataRate = ReadRegister(RF_SETUP) & ((byte) DataRate.DR250Kbps | (byte) DataRate.DR2Mbps);
+            return (DataRate) dataRate;
         }
-        
+
         /// <summary>
         /// Set Working Channel
         /// </summary>
@@ -543,54 +564,52 @@ namespace NRF24L01Plus
         {
             WriteRegister(RF_CH, channel);
         }
-        
+
         /// <summary>
         /// Send
         /// </summary>
         /// <param name="data">Data</param>
         public void SendData(byte[] pipeAddress, byte[] data)
         {
-            if (ce != null)
-                ce.Write(PinValue.Low);
+            gpio.Write(CE, PinValue.Low);
 
             FlushTX();
             WriteRegister(RX_ADDR_P0, pipeAddress);
             WriteRegister(TX_ADDR, pipeAddress);
             WriteRegister(RX_PW_P0, packetSize);
-            
+
             SetPowerMode(PowerMode.PowerUp);
             SetWorkingMode(ChipWorkMode.Transfer);
-            
+
             byte[] buffer = new byte[1 + data.Length];
             buffer[0] = W_TX_PAYLOAD;
             for (int i = 0; i < data.Length; i++)
             {
                 buffer[1 + i] = data[i];
             }
+
             sensor.Write(buffer);
 
-            if (ce != null)
-            {
-                ce.Write(PinValue.High);
-                MicrosecondTimer.Wait(130);
-                ce.Write(PinValue.Low);
-            }
+            gpio.Write(CE, PinValue.High);
+            MicrosecondTimer.Wait(130);
+            gpio.Write(CE, PinValue.Low);
 
             var retryPolicy = GetRetryPolicy();
             var retries = 0;
-            
+
             var whatHappened = WhatHappened;
-            while(!(whatHappened.DataTransfered || whatHappened.MaxRetriesExceeded) && retries <= retryPolicy.MaxRetries)
+            while (!(whatHappened.DataTransfered || whatHappened.MaxRetriesExceeded) && retries <= retryPolicy.MaxRetries)
             {
                 MicrosecondTimer.Wait(retryPolicy.DelayInMicroseconds);
                 whatHappened = WhatHappened;
                 retries++;
             }
+
             ClearTransmitEventRegisters();
-            
+
             FlushTX();
             SetWorkingMode(ChipWorkMode.Receive);
-            ce.Write(PinValue.High);
+            gpio.Write(CE, PinValue.High);
         }
 
         /// <summary>
@@ -637,11 +656,14 @@ namespace NRF24L01Plus
         /// </summary>
         public event EventHandler<ReceivedDataEventArgs> ReceivedData;
 
-        private void Irq_ValueChanged(object sender, PinValueChangedEventArgs args)
+
+        private void Irq_ValueChangedDown(object sender, PinValueChangedEventArgs args)
         {
-            Console.WriteLine("\t\t\tData arrived! ");
-            ReceivedData(sender, new ReceivedDataEventArgs(Receive(packetSize)));
+            if (ReceivedData != null)
+            {
+                Console.WriteLine("\t\t\tData arrived! ");
+                ReceivedData(sender, new ReceivedDataEventArgs(Receive(packetSize)));
+            }
         }
     }
 }
-
