@@ -26,7 +26,6 @@ using System.Collections.Generic;
 using System.Device.Gpio;
 using System.Device.Gpio.Drivers;
 using System.Device.Spi;
-using System.Device.Spi.Drivers;
 
 namespace NRF24L01Plus
 {
@@ -174,7 +173,7 @@ namespace NRF24L01Plus
             settings.DataBitLength = 8;
             settings.Mode = SpiMode.Mode0;
 
-            sensor = new UnixSpiDevice(settings);
+            sensor = SpiDevice.Create(settings);
             driver = new RaspberryPi3Driver();
             gpio = new GpioController(PinNumberingScheme.Logical, driver);
 
@@ -219,7 +218,7 @@ namespace NRF24L01Plus
             sensor.Write(new byte[] {FLUSH_RX});
         }
 
-        public string GetDetailsString()
+        public string GetStatusString() 
         {
             var status = GetStatus();
             StringBuilder details = new StringBuilder();
@@ -229,6 +228,12 @@ namespace NRF24L01Plus
             details.Append($" MAX_RT={((status & (1 << MAX_RT)) != 0 ? 1 : 0):X2}");
             details.Append($" RX_P_NO={((status >> RX_P_NO) & 7):X2}");
             details.AppendLine($" TX_FULL={((status & (1 << TX_FULL)) != 0 ? 1 : 0):X2}");
+            return details.ToString();
+        }
+
+        public string GetDetailsString()
+        {
+            StringBuilder details = new StringBuilder(GetStatusString());
 
             details.AppendLine(GetSettingString(" RX_ADDR_P0-1", RX_ADDR_P0, 5, 2));
             details.AppendLine(GetSettingString(" RX_ADDR_P2-5", RX_ADDR_P2, 1, 4));
@@ -641,6 +646,15 @@ namespace NRF24L01Plus
             return result;
         }
 
+        public byte ReadPayloadLength() {
+            var command = new byte[2];
+            command[0] = 0b01100000;
+            var result = new byte[2];
+            sensor.TransferFullDuplex(command, result);
+            Console.WriteLine($"read raw: {result[1]}");
+            return result[1];
+        }
+
         /// <summary>
         /// Cleanup
         /// </summary>
@@ -661,8 +675,12 @@ namespace NRF24L01Plus
         {
             if (ReceivedData != null)
             {
-                Console.WriteLine("\t\t\tData arrived! ");
-                ReceivedData(sender, new ReceivedDataEventArgs(Receive(packetSize)));
+                if (NewDataAvailable()) {
+                    Console.WriteLine("\t\t\tData arrived! ");
+                    ReceivedData(sender, new ReceivedDataEventArgs(new byte[] {}));
+                    FlushRX();
+                    ClearDataReceivedRegister();
+                }
             }
         }
     }
