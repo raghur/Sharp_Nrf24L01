@@ -609,6 +609,7 @@ namespace NRF24L01Plus
                 whatHappened = WhatHappened;
                 retries++;
             }
+            Console.WriteLine($"Data Transferred: {whatHappened.DataTransfered}, retries: {retries}");
 
             ClearTransmitEventRegisters();
 
