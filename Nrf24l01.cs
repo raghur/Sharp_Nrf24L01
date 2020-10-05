@@ -652,7 +652,7 @@ namespace NRF24L01Plus
             command[0] = 0b01100000;
             var result = new byte[2];
             sensor.TransferFullDuplex(command, result);
-            Console.WriteLine($"read raw: {result[1]}");
+            // Console.WriteLine($"read raw: {result[1]}");
             return result[1];
         }
 
@@ -677,7 +677,6 @@ namespace NRF24L01Plus
             if (ReceivedData != null)
             {
                 if (NewDataAvailable()) {
-                    Console.WriteLine("\t\t\tData arrived! ");
                     ReceivedData(sender, new ReceivedDataEventArgs(new byte[] {}));
                     FlushRX();
                     ClearDataReceivedRegister();
